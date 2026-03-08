@@ -11,7 +11,7 @@ function pushOverTime<T>(stream: Stream<T>, values: T[], intervalMs: number, fin
   let i = 0;
   const id = setInterval(() => {
     if (i < values.length) {
-      stream.next(values[i++]);
+      stream.next(values[i++]!);
     } else {
       clearInterval(id);
       stream.return(finalValue);
@@ -130,7 +130,7 @@ function handleStreamEndpoint(res: http.ServerResponse) {
   });
 
   const make = shapes[Math.floor(Math.random() * shapes.length)];
-  const data = make();
+  const data = make!();
 
   res.write(getCrossReferenceHeader() + '\n');
 
