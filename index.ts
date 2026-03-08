@@ -1,4 +1,4 @@
-import { serialize } from 'seroval';
+import { serialize, deserialize, createStream } from 'seroval';
 
 const object: any = {
     number: [Math.random(), -0, NaN, Infinity, -Infinity],
@@ -30,4 +30,6 @@ object.map.set('mutual', object.set);
 object.set.add(object.array);
 
 const result = serialize(object);
-console.log(result);
+
+const parsed = deserialize(result);
+console.log(parsed);
