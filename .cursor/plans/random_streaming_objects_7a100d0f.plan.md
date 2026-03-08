@@ -4,7 +4,7 @@ overview: Rewrite index.ts so the server randomly picks one of three complex obj
 todos:
   - id: rewrite-index
     content: Rewrite index.ts with random shape selection, three data generators, and generic recursive client renderer
-    status: pending
+    status: completed
 isProject: false
 ---
 
