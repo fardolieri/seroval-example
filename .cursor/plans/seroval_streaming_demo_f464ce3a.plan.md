@@ -4,10 +4,10 @@ overview: Create a server.ts with two endpoints -- GET / serves an HTML client p
 todos:
   - id: server-file
     content: Create server.ts with HTTP server, two endpoints (/ for HTML client, /api/test1 for streaming seroval data)
-    status: pending
+    status: completed
   - id: update-index
     content: Replace index.ts with the server code
-    status: pending
+    status: completed
 isProject: false
 ---
 
