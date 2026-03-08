@@ -1,35 +1,31 @@
 import http from 'node:http';
 import fs from 'node:fs';
-import path from 'node:path';
 import { toCrossJSONStream, createStream, type Stream } from 'seroval';
 
 const PORT = 3000;
 
-const SEROVAL_ESM_PATH = path.join(
-  import.meta.dirname,
-  'node_modules/seroval/dist/esm/production/index.mjs',
+const serovalBundle = fs.readFileSync(
+  import.meta.dirname + '/node_modules/seroval/dist/esm/production/index.mjs',
+  'utf-8',
 );
-const serovalBundle = fs.readFileSync(SEROVAL_ESM_PATH, 'utf-8');
 
 function delay<T>(ms: number, value: T): Promise<T> {
-  return new Promise(resolve => setTimeout(() => resolve(value), ms));
+  return new Promise(r => setTimeout(() => r(value), ms));
 }
 
-function pushOverTime<T>(stream: Stream<T>, values: T[], intervalMs: number, finalValue: T) {
+function drip<T>(stream: Stream<T>, items: T[], ms: number, last: T) {
   let i = 0;
   const id = setInterval(() => {
-    if (i < values.length) {
-      stream.next(values[i++]!);
-    } else {
-      clearInterval(id);
-      stream.return(finalValue);
-    }
-  }, intervalMs);
+    if (i < items.length) stream.next(items[i++]!);
+    else { clearInterval(id); stream.return(last); }
+  }, ms);
 }
 
-function makeShapeA() {
-  const activityFeed = createStream<string>();
-  pushOverTime(activityFeed, [
+// ── Three random data shapes ──────────────────────────────────────────
+
+function makeUser() {
+  const feed = createStream<string>();
+  drip(feed, [
     'Logged in from Chrome on macOS',
     'Updated avatar',
     'Changed email to alice@new.dev',
@@ -40,11 +36,7 @@ function makeShapeA() {
     username: 'alice42',
     verified: true,
     joinedAt: new Date('2024-03-15T08:30:00Z'),
-    settings: {
-      theme: 'dark',
-      locale: 'en-US',
-      notifications: { email: true, push: false, sms: false },
-    },
+    settings: { theme: 'dark', locale: 'en-US', notifications: { email: true, push: false, sms: false } },
     profile: delay(1500, {
       displayName: 'Alice Nakamura',
       bio: 'Software engineer & open-source enthusiast',
@@ -56,13 +48,13 @@ function makeShapeA() {
       { id: 2, title: 'Streaming data patterns', likes: 17 },
       { id: 3, title: 'Why I moved to Bun', likes: 89 },
     ]),
-    activityFeed,
+    activityFeed: feed,
   };
 }
 
-function makeShapeB() {
-  const notifications = createStream<{ level: string; message: string }>();
-  pushOverTime(notifications, [
+function makeDashboard() {
+  const notifs = createStream<{ level: string; message: string }>();
+  drip(notifs, [
     { level: 'info', message: 'Deploy #487 succeeded' },
     { level: 'warn', message: 'CPU usage above 80%' },
     { level: 'info', message: '3 new sign-ups today' },
@@ -72,31 +64,23 @@ function makeShapeB() {
   return {
     kind: 'dashboard',
     generatedAt: new Date(),
-    stats: {
-      users: 12847,
-      activeToday: 431,
-      revenue: 28493.5,
-      uptime: 99.97,
-    },
+    stats: { users: 12847, activeToday: 431, revenue: 28493.5, uptime: 99.97 },
     chartData: delay(2000, {
       labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
       visits: [1200, 1350, 980, 1500, 1700, 900, 1100],
       conversions: [42, 58, 31, 67, 73, 28, 45],
     }),
     weather: delay(1000, {
-      city: 'San Francisco',
-      temp: 18,
-      unit: 'C',
-      condition: 'Partly cloudy',
-      forecast: ['Sunny', 'Cloudy', 'Rain'],
+      city: 'San Francisco', temp: 18, unit: 'C',
+      condition: 'Partly cloudy', forecast: ['Sunny', 'Cloudy', 'Rain'],
     }),
-    notifications,
+    notifications: notifs,
   };
 }
 
-function makeShapeC() {
-  const trackingUpdates = createStream<{ time: string; status: string }>();
-  pushOverTime(trackingUpdates, [
+function makeOrder() {
+  const tracking = createStream<{ time: string; status: string }>();
+  drip(tracking, [
     { time: '09:00', status: 'Package picked up from warehouse' },
     { time: '11:30', status: 'In transit — sorting facility' },
     { time: '14:15', status: 'Out for delivery' },
@@ -112,47 +96,35 @@ function makeShapeC() {
       { sku: 'MPAD-XL', name: 'Desk Mat XL', qty: 1, price: 34.99 },
     ],
     shippingStatus: delay(2500, {
-      carrier: 'FastShip',
-      trackingNumber: 'FS-8842991102',
-      estimatedDelivery: '2026-03-09',
-      weight: '1.4kg',
+      carrier: 'FastShip', trackingNumber: 'FS-8842991102',
+      estimatedDelivery: '2026-03-09', weight: '1.4kg',
     }),
-    receipt: delay(1200, {
-      subtotal: 210.96,
-      tax: 17.38,
-      shipping: 5.99,
-      total: 234.33,
-      currency: 'USD',
-    }),
-    trackingUpdates,
+    receipt: delay(1200, { subtotal: 210.96, tax: 17.38, shipping: 5.99, total: 234.33, currency: 'USD' }),
+    trackingUpdates: tracking,
   };
 }
 
-const shapes = [makeShapeA, makeShapeB, makeShapeC];
+const shapes = [makeUser, makeDashboard, makeOrder];
 
-function handleStreamEndpoint(res: http.ServerResponse) {
+// ── Streaming endpoint ────────────────────────────────────────────────
+
+function handleStream(res: http.ServerResponse) {
   res.writeHead(200, {
     'Content-Type': 'text/plain; charset=utf-8',
     'Transfer-Encoding': 'chunked',
     'Cache-Control': 'no-cache',
   });
 
-  const make = shapes[Math.floor(Math.random() * shapes.length)]!;
-  const data = make();
+  const data = shapes[Math.floor(Math.random() * shapes.length)]!();
 
   toCrossJSONStream(data, {
-    onParse(node) {
-      res.write(JSON.stringify(node) + '\n');
-    },
-    onError(error) {
-      console.error('Stream error:', error);
-      res.end();
-    },
-    onDone() {
-      res.end();
-    },
+    onParse(node) { res.write(JSON.stringify(node) + '\n'); },
+    onError(err) { console.error('Stream error:', err); res.end(); },
+    onDone() { res.end(); },
   });
 }
+
+// ── HTML client ───────────────────────────────────────────────────────
 
 const HTML = /*html*/ `<!DOCTYPE html>
 <html lang="en">
@@ -162,17 +134,12 @@ const HTML = /*html*/ `<!DOCTYPE html>
 <title>Seroval Streaming Demo</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: system-ui, sans-serif;
-    background: #0a0a0a; color: #c8c8c8;
-    padding: 2rem;
-  }
+  body { font-family: system-ui, sans-serif; background: #0a0a0a; color: #c8c8c8; padding: 2rem; }
   h1 { font-size: 1.4rem; color: #fff; margin-bottom: 1rem; }
   p.hint { color: #666; font-size: 0.85rem; margin-bottom: 1rem; }
   button {
     background: #2563eb; color: #fff; border: none;
-    padding: 0.5rem 1.2rem; border-radius: 6px;
-    font-size: 0.9rem; cursor: pointer;
+    padding: 0.5rem 1.2rem; border-radius: 6px; font-size: 0.9rem; cursor: pointer;
   }
   button:hover { background: #1d4ed8; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -184,14 +151,9 @@ const HTML = /*html*/ `<!DOCTYPE html>
     min-height: 3rem; white-space: pre-wrap; word-break: break-word;
     overflow-y: auto; max-height: 80vh;
   }
-  .pending { color: #555; }
-  .str { color: #a5d6a7; }
-  .num { color: #90caf9; }
-  .bool { color: #ce93d8; }
-  .null { color: #666; font-style: italic; }
-  .key { color: #e0e0e0; }
-  .date { color: #ffcc80; }
-  .stream-label { color: #4fc3f7; }
+  .p { color: #555; } .s { color: #a5d6a7; } .n { color: #90caf9; }
+  .b { color: #ce93d8; } .x { color: #666; font-style: italic; }
+  .k { color: #e0e0e0; } .d { color: #ffcc80; } .t { color: #4fc3f7; }
 </style>
 </head>
 <body>
@@ -213,120 +175,92 @@ async function startStream() {
   output.innerHTML = '';
 
   const refs = new Map();
-  const subscribedStreams = new WeakSet();
-  const streamBuffers = new WeakMap();
-  const promiseStates = new WeakMap();
+  const streams = new WeakMap();
+  const promises = new WeakMap();
   let root = null;
 
-  function render(val) {
-    output.innerHTML = renderValue(val, 0);
-  }
+  const rerender = () => { if (root) output.innerHTML = pretty(root, 0); };
 
-  function renderValue(val, depth) {
-    const indent = '  '.repeat(depth);
-    const indent1 = '  '.repeat(depth + 1);
-
-    if (val === null) return '<span class="null">null</span>';
-    if (val === undefined) return '<span class="null">undefined</span>';
-
-    if (typeof val === 'string') return '<span class="str">' + esc(JSON.stringify(val)) + '</span>';
-    if (typeof val === 'number') return '<span class="num">' + val + '</span>';
-    if (typeof val === 'boolean') return '<span class="bool">' + val + '</span>';
-    if (typeof val === 'bigint') return '<span class="num">' + val + 'n</span>';
-
-    if (val instanceof Date) return '<span class="date">Date(' + esc(val.toISOString()) + ')</span>';
-    if (val instanceof RegExp) return '<span class="date">' + esc(String(val)) + '</span>';
+  function pretty(val, d) {
+    if (val === null) return '<span class=x>null</span>';
+    if (val === undefined) return '<span class=x>undefined</span>';
+    if (typeof val === 'string') return '<span class=s>' + esc(JSON.stringify(val)) + '</span>';
+    if (typeof val === 'number') return '<span class=n>' + val + '</span>';
+    if (typeof val === 'boolean') return '<span class=b>' + val + '</span>';
+    if (typeof val === 'bigint') return '<span class=n>' + val + 'n</span>';
+    if (val instanceof Date) return '<span class=d>Date(' + esc(val.toISOString()) + ')</span>';
+    if (val instanceof RegExp) return '<span class=d>' + esc(String(val)) + '</span>';
 
     if (val instanceof Promise) {
-      if (!promiseStates.has(val)) {
-        promiseStates.set(val, { resolved: false, value: undefined });
-        val.then(v => { promiseStates.set(val, { resolved: true, value: v }); if (root) render(root); });
+      if (!promises.has(val)) {
+        promises.set(val, undefined);
+        val.then(v => { promises.set(val, v); rerender(); });
       }
-      const ps = promiseStates.get(val);
-      if (ps.resolved) return renderValue(ps.value, depth);
-      return '<span class="pending">&lt;pending...&gt;</span>';
+      const resolved = promises.get(val);
+      return resolved !== undefined ? pretty(resolved, d) : '<span class=p>&lt;pending...&gt;</span>';
     }
 
-    if (val && val.__SEROVAL_STREAM__) {
-      if (!subscribedStreams.has(val)) {
-        subscribedStreams.add(val);
-        streamBuffers.set(val, { items: [], done: false });
+    if (val?.__SEROVAL_STREAM__) {
+      if (!streams.has(val)) {
+        streams.set(val, { items: [], done: false });
         val.on({
-          next(v) { streamBuffers.get(val).items.push(v); if (root) render(root); },
-          throw(v) { streamBuffers.get(val).items.push({ __err__: v }); if (root) render(root); },
-          return(v) { const b = streamBuffers.get(val); b.items.push(v); b.done = true; if (root) render(root); },
+          next(v) { streams.get(val).items.push(v); rerender(); },
+          throw(v) { streams.get(val).items.push(v); rerender(); },
+          return(v) { const b = streams.get(val); b.items.push(v); b.done = true; rerender(); },
         });
       }
-      const buf = streamBuffers.get(val);
-      if (!buf || buf.items.length === 0) {
-        return '<span class="stream-label">Stream []</span>' +
-          (!buf || !buf.done ? ' <span class="pending">(waiting...)</span>' : '');
-      }
-      let out = '<span class="stream-label">Stream</span> [\\n';
-      for (let i = 0; i < buf.items.length; i++) {
-        out += indent1 + renderValue(buf.items[i], depth + 1);
-        if (i < buf.items.length - 1) out += ',';
-        out += '\\n';
-      }
-      out += indent + ']';
-      if (!buf.done) out += ' <span class="pending">(streaming...)</span>';
-      return out;
+      const buf = streams.get(val);
+      const suffix = buf.done ? '' : ' <span class=p>(streaming...)</span>';
+      return buf.items.length === 0
+        ? '<span class=t>Stream</span> []' + suffix
+        : '<span class=t>Stream</span> ' + list(buf.items, d) + suffix;
     }
 
-    if (Array.isArray(val)) {
-      if (val.length === 0) return '[]';
-      let out = '[\\n';
-      for (let i = 0; i < val.length; i++) {
-        out += indent1 + renderValue(val[i], depth + 1);
-        if (i < val.length - 1) out += ',';
-        out += '\\n';
-      }
-      out += indent + ']';
-      return out;
-    }
+    if (Array.isArray(val)) return val.length === 0 ? '[]' : list(val, d);
 
     if (typeof val === 'object') {
       const keys = Object.keys(val);
       if (keys.length === 0) return '{}';
-      let out = '{\\n';
-      for (let i = 0; i < keys.length; i++) {
-        const k = keys[i];
-        out += indent1 + '<span class="key">' + esc(k) + '</span>: ' + renderValue(val[k], depth + 1);
-        if (i < keys.length - 1) out += ',';
-        out += '\\n';
-      }
-      out += indent + '}';
-      return out;
+      const i1 = '  '.repeat(d + 1);
+      const i0 = '  '.repeat(d);
+      return '{\\n' + keys.map((k, idx) =>
+        i1 + '<span class=k>' + esc(k) + '</span>: ' + pretty(val[k], d + 1)
+      ).join(',\\n') + '\\n' + i0 + '}';
     }
 
     return esc(String(val));
   }
 
+  function list(arr, d) {
+    const i1 = '  '.repeat(d + 1);
+    const i0 = '  '.repeat(d);
+    return '[\\n' + arr.map(v => i1 + pretty(v, d + 1)).join(',\\n') + '\\n' + i0 + ']';
+  }
+
   const res = await fetch('/api/test1');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
+  let buf = '';
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\\n');
-    buffer = lines.pop();
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\\n');
+    buf = lines.pop();
     for (const line of lines) {
       if (!line.trim()) continue;
-      const node = JSON.parse(line);
-      const result = fromCrossJSON(node, { refs });
+      const result = fromCrossJSON(JSON.parse(line), { refs });
       if (root === null && result !== undefined) root = result;
     }
-    if (root) render(root);
+    rerender();
     await new Promise(r => queueMicrotask(r));
-    if (root) render(root);
+    rerender();
   }
 
   btn.disabled = false;
   btn.textContent = 'Fetch again (random shape)';
-  if (root) render(root);
+  rerender();
 }
 
 function esc(s) {
@@ -336,27 +270,20 @@ function esc(s) {
 </body>
 </html>`;
 
+// ── Server ────────────────────────────────────────────────────────────
+
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+  const { pathname } = new URL(req.url ?? '/', `http://${req.headers.host}`);
 
-  if (url.pathname === '/api/test1') {
-    handleStreamEndpoint(res);
-    return;
+  if (pathname === '/api/test1') return handleStream(res);
+
+  if (pathname === '/vendor/seroval.mjs') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'public, max-age=31536000, immutable' });
+    return res.end(serovalBundle);
   }
 
-  if (url.pathname === '/vendor/seroval.mjs') {
-    res.writeHead(200, {
-      'Content-Type': 'application/javascript; charset=utf-8',
-      'Cache-Control': 'public, max-age=31536000, immutable',
-    });
-    res.end(serovalBundle);
-    return;
-  }
-
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.writeHead(200, { 'Content-Type': 'text/html' });
   res.end(HTML);
 });
 
-server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+server.listen(PORT, () => console.log(`http://localhost:${PORT}`));
