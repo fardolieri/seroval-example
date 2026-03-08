@@ -4,11 +4,6 @@ import { toCrossJSONStream, createStream, type Stream } from 'seroval';
 
 const PORT = 3000;
 
-const serovalBundle = fs.readFileSync(
-  import.meta.dirname + '/node_modules/seroval/dist/esm/production/index.mjs',
-  'utf-8',
-);
-
 function delay<T>(ms: number, value: T): Promise<T> {
   return new Promise(r => setTimeout(() => r(value), ms));
 }
@@ -16,8 +11,13 @@ function delay<T>(ms: number, value: T): Promise<T> {
 function drip<T>(stream: Stream<T>, items: T[], ms: number, last: T) {
   let i = 0;
   const id = setInterval(() => {
-    if (i < items.length) stream.next(items[i++]!);
-    else { clearInterval(id); stream.return(last); }
+    if (i < items.length) {
+      stream.next(items[i++]!);
+    }
+    else {
+      clearInterval(id);
+      stream.return(last);
+    }
   }, ms);
 }
 
@@ -118,9 +118,16 @@ function handleStream(res: http.ServerResponse) {
   const data = shapes[Math.floor(Math.random() * shapes.length)]!();
 
   toCrossJSONStream(data, {
-    onParse(node) { res.write(JSON.stringify(node) + '\n'); },
-    onError(err) { console.error('Stream error:', err); res.end(); },
-    onDone() { res.end(); },
+    onParse(node) {
+      res.write(JSON.stringify(node) + '\n');
+    },
+    onError(err) {
+      console.error('Stream error:', err);
+      res.end();
+    },
+    onDone() {
+      res.end();
+    },
   });
 }
 
@@ -278,7 +285,11 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/test1') return handleStream(res);
 
   if (pathname === '/vendor/seroval.mjs') {
-    res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'public, max-age=31536000, immutable' });
+    res.writeHead(200, { 'Content-Type': 'application/javascript' });
+    const serovalBundle = fs.readFileSync(
+      import.meta.dirname + '/node_modules/seroval/dist/esm/production/index.mjs',
+      'utf-8',
+    )
     return res.end(serovalBundle);
   }
 
