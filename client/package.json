@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "seroval": "^1.5.0",
     "solid-js": "^1.9.10"
   },
   "devDependencies": {
