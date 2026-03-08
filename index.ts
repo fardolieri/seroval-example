@@ -204,10 +204,6 @@ import { fromCrossJSON } from '/vendor/seroval.mjs';
 
 const btn = document.getElementById('btn');
 const output = document.getElementById('output');
-const subscribedStreams = new WeakSet();
-const streamBuffers = new WeakMap();
-const promiseStates = new WeakMap();
-let root = null;
 
 btn.addEventListener('click', startStream);
 
@@ -215,9 +211,97 @@ async function startStream() {
   btn.disabled = true;
   btn.textContent = 'Streaming...';
   output.innerHTML = '';
-  root = null;
 
   const refs = new Map();
+  const subscribedStreams = new WeakSet();
+  const streamBuffers = new WeakMap();
+  const promiseStates = new WeakMap();
+  let root = null;
+
+  function render(val) {
+    output.innerHTML = renderValue(val, 0);
+  }
+
+  function renderValue(val, depth) {
+    const indent = '  '.repeat(depth);
+    const indent1 = '  '.repeat(depth + 1);
+
+    if (val === null) return '<span class="null">null</span>';
+    if (val === undefined) return '<span class="null">undefined</span>';
+
+    if (typeof val === 'string') return '<span class="str">' + esc(JSON.stringify(val)) + '</span>';
+    if (typeof val === 'number') return '<span class="num">' + val + '</span>';
+    if (typeof val === 'boolean') return '<span class="bool">' + val + '</span>';
+    if (typeof val === 'bigint') return '<span class="num">' + val + 'n</span>';
+
+    if (val instanceof Date) return '<span class="date">Date(' + esc(val.toISOString()) + ')</span>';
+    if (val instanceof RegExp) return '<span class="date">' + esc(String(val)) + '</span>';
+
+    if (val instanceof Promise) {
+      if (!promiseStates.has(val)) {
+        promiseStates.set(val, { resolved: false, value: undefined });
+        val.then(v => { promiseStates.set(val, { resolved: true, value: v }); if (root) render(root); });
+      }
+      const ps = promiseStates.get(val);
+      if (ps.resolved) return renderValue(ps.value, depth);
+      return '<span class="pending">&lt;pending...&gt;</span>';
+    }
+
+    if (val && val.__SEROVAL_STREAM__) {
+      if (!subscribedStreams.has(val)) {
+        subscribedStreams.add(val);
+        streamBuffers.set(val, { items: [], done: false });
+        val.on({
+          next(v) { streamBuffers.get(val).items.push(v); if (root) render(root); },
+          throw(v) { streamBuffers.get(val).items.push({ __err__: v }); if (root) render(root); },
+          return(v) { const b = streamBuffers.get(val); b.items.push(v); b.done = true; if (root) render(root); },
+        });
+      }
+      const buf = streamBuffers.get(val);
+      if (!buf || buf.items.length === 0) {
+        return '<span class="stream-label">Stream []</span>' +
+          (!buf || !buf.done ? ' <span class="pending">(waiting...)</span>' : '');
+      }
+      let out = '<span class="stream-label">Stream</span> [\\n';
+      for (let i = 0; i < buf.items.length; i++) {
+        out += indent1 + renderValue(buf.items[i], depth + 1);
+        if (i < buf.items.length - 1) out += ',';
+        out += '\\n';
+      }
+      out += indent + ']';
+      if (!buf.done) out += ' <span class="pending">(streaming...)</span>';
+      return out;
+    }
+
+    if (Array.isArray(val)) {
+      if (val.length === 0) return '[]';
+      let out = '[\\n';
+      for (let i = 0; i < val.length; i++) {
+        out += indent1 + renderValue(val[i], depth + 1);
+        if (i < val.length - 1) out += ',';
+        out += '\\n';
+      }
+      out += indent + ']';
+      return out;
+    }
+
+    if (typeof val === 'object') {
+      const keys = Object.keys(val);
+      if (keys.length === 0) return '{}';
+      let out = '{\\n';
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        out += indent1 + '<span class="key">' + esc(k) + '</span>: ' + renderValue(val[k], depth + 1);
+        if (i < keys.length - 1) out += ',';
+        out += '\\n';
+      }
+      out += indent + '}';
+      return out;
+    }
+
+    return esc(String(val));
+  }
+
   const res = await fetch('/api/test1');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -235,99 +319,14 @@ async function startStream() {
       const result = fromCrossJSON(node, { refs });
       if (root === null && result !== undefined) root = result;
     }
-    render();
+    if (root) render(root);
     await new Promise(r => queueMicrotask(r));
-    render();
+    if (root) render(root);
   }
 
   btn.disabled = false;
   btn.textContent = 'Fetch again (random shape)';
-  render();
-}
-
-function render() {
-  if (!root) return;
-  output.innerHTML = renderValue(root, 0);
-}
-
-function renderValue(val, depth) {
-  const indent = '  '.repeat(depth);
-  const indent1 = '  '.repeat(depth + 1);
-
-  if (val === null) return '<span class="null">null</span>';
-  if (val === undefined) return '<span class="null">undefined</span>';
-
-  if (typeof val === 'string') return '<span class="str">' + esc(JSON.stringify(val)) + '</span>';
-  if (typeof val === 'number') return '<span class="num">' + val + '</span>';
-  if (typeof val === 'boolean') return '<span class="bool">' + val + '</span>';
-  if (typeof val === 'bigint') return '<span class="num">' + val + 'n</span>';
-
-  if (val instanceof Date) return '<span class="date">Date(' + esc(val.toISOString()) + ')</span>';
-  if (val instanceof RegExp) return '<span class="date">' + esc(String(val)) + '</span>';
-
-  if (val instanceof Promise) {
-    if (!promiseStates.has(val)) {
-      promiseStates.set(val, { resolved: false, value: undefined });
-      val.then(v => { promiseStates.set(val, { resolved: true, value: v }); render(); });
-    }
-    const ps = promiseStates.get(val);
-    if (ps.resolved) return renderValue(ps.value, depth);
-    return '<span class="pending">&lt;pending...&gt;</span>';
-  }
-
-  if (val && val.__SEROVAL_STREAM__) {
-    if (!subscribedStreams.has(val)) {
-      subscribedStreams.add(val);
-      streamBuffers.set(val, { items: [], done: false });
-      val.on({
-        next(v) { streamBuffers.get(val).items.push(v); render(); },
-        throw(v) { streamBuffers.get(val).items.push({ __err__: v }); render(); },
-        return(v) { const b = streamBuffers.get(val); b.items.push(v); b.done = true; render(); },
-      });
-    }
-    const buf = streamBuffers.get(val);
-    if (!buf || buf.items.length === 0) {
-      return '<span class="stream-label">Stream []</span>' +
-        (!buf || !buf.done ? ' <span class="pending">(waiting...)</span>' : '');
-    }
-    let out = '<span class="stream-label">Stream</span> [\\n';
-    for (let i = 0; i < buf.items.length; i++) {
-      out += indent1 + renderValue(buf.items[i], depth + 1);
-      if (i < buf.items.length - 1) out += ',';
-      out += '\\n';
-    }
-    out += indent + ']';
-    if (!buf.done) out += ' <span class="pending">(streaming...)</span>';
-    return out;
-  }
-
-  if (Array.isArray(val)) {
-    if (val.length === 0) return '[]';
-    let out = '[\\n';
-    for (let i = 0; i < val.length; i++) {
-      out += indent1 + renderValue(val[i], depth + 1);
-      if (i < val.length - 1) out += ',';
-      out += '\\n';
-    }
-    out += indent + ']';
-    return out;
-  }
-
-  if (typeof val === 'object') {
-    const keys = Object.keys(val);
-    if (keys.length === 0) return '{}';
-    let out = '{\\n';
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
-      out += indent1 + '<span class="key">' + esc(k) + '</span>: ' + renderValue(val[k], depth + 1);
-      if (i < keys.length - 1) out += ',';
-      out += '\\n';
-    }
-    out += indent + '}';
-    return out;
-  }
-
-  return esc(String(val));
+  if (root) render(root);
 }
 
 function esc(s) {
