@@ -95,8 +95,7 @@ function App() {
         const result = fromCrossJSON(JSON.parse(line), { refs });
         if (root === null && result !== undefined) root = result as Record<string, unknown>;
       }
-      rerender();
-      await new Promise(r => queueMicrotask(r));
+      await new Promise<void>(r => queueMicrotask(r));
       rerender();
     }
 
