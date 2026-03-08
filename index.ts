@@ -1,7 +1,15 @@
 import http from 'node:http';
-import { crossSerializeStream, getCrossReferenceHeader, createStream, type Stream } from 'seroval';
+import fs from 'node:fs';
+import path from 'node:path';
+import { toCrossJSONStream, createStream, type Stream } from 'seroval';
 
 const PORT = 3000;
+
+const SEROVAL_ESM_PATH = path.join(
+  import.meta.dirname,
+  'node_modules/seroval/dist/esm/production/index.mjs',
+);
+const serovalBundle = fs.readFileSync(SEROVAL_ESM_PATH, 'utf-8');
 
 function delay<T>(ms: number, value: T): Promise<T> {
   return new Promise(resolve => setTimeout(() => resolve(value), ms));
@@ -129,14 +137,12 @@ function handleStreamEndpoint(res: http.ServerResponse) {
     'Cache-Control': 'no-cache',
   });
 
-  const make = shapes[Math.floor(Math.random() * shapes.length)];
-  const data = make!();
+  const make = shapes[Math.floor(Math.random() * shapes.length)]!;
+  const data = make();
 
-  res.write(getCrossReferenceHeader() + '\n');
-
-  crossSerializeStream(data, {
-    onSerialize(chunk) {
-      res.write(chunk + '\n');
+  toCrossJSONStream(data, {
+    onParse(node) {
+      res.write(JSON.stringify(node) + '\n');
     },
     onError(error) {
       console.error('Stream error:', error);
@@ -190,14 +196,18 @@ const HTML = /*html*/ `<!DOCTYPE html>
 </head>
 <body>
 <h1>Seroval Streaming Demo</h1>
-<p class="hint">Each request returns a random object shape. Promises resolve over time.</p>
+<p class="hint">Each request returns a random object shape. No eval — deserialized with seroval's fromCrossJSON.</p>
 <button id="btn">Fetch /api/test1</button>
 <pre id="output"></pre>
-<script>
+<script type="module">
+import { fromCrossJSON } from '/vendor/seroval.mjs';
+
 const btn = document.getElementById('btn');
 const output = document.getElementById('output');
 const subscribedStreams = new WeakSet();
 const streamBuffers = new WeakMap();
+const promiseStates = new WeakMap();
+let root = null;
 
 btn.addEventListener('click', startStream);
 
@@ -205,8 +215,9 @@ async function startStream() {
   btn.disabled = true;
   btn.textContent = 'Streaming...';
   output.innerHTML = '';
-  self.$R = undefined;
+  root = null;
 
+  const refs = new Map();
   const res = await fetch('/api/test1');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -220,7 +231,9 @@ async function startStream() {
     buffer = lines.pop();
     for (const line of lines) {
       if (!line.trim()) continue;
-      try { (0, eval)(line); } catch (e) { console.error('eval error:', e); }
+      const node = JSON.parse(line);
+      const result = fromCrossJSON(node, { refs });
+      if (root === null && result !== undefined) root = result;
     }
     render();
     await new Promise(r => queueMicrotask(r));
@@ -233,8 +246,8 @@ async function startStream() {
 }
 
 function render() {
-  if (!self.$R || $R[0] === undefined) return;
-  output.innerHTML = renderValue($R[0], 0);
+  if (!root) return;
+  output.innerHTML = renderValue(root, 0);
 }
 
 function renderValue(val, depth) {
@@ -253,7 +266,12 @@ function renderValue(val, depth) {
   if (val instanceof RegExp) return '<span class="date">' + esc(String(val)) + '</span>';
 
   if (val instanceof Promise) {
-    if (val.s === 1) return renderValue(val.v, depth);
+    if (!promiseStates.has(val)) {
+      promiseStates.set(val, { resolved: false, value: undefined });
+      val.then(v => { promiseStates.set(val, { resolved: true, value: v }); render(); });
+    }
+    const ps = promiseStates.get(val);
+    if (ps.resolved) return renderValue(ps.value, depth);
     return '<span class="pending">&lt;pending...&gt;</span>';
   }
 
@@ -324,6 +342,15 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/test1') {
     handleStreamEndpoint(res);
+    return;
+  }
+
+  if (url.pathname === '/vendor/seroval.mjs') {
+    res.writeHead(200, {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    });
+    res.end(serovalBundle);
     return;
   }
 
