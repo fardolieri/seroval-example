@@ -4,13 +4,13 @@ overview: Refactor into idiomatic SolidJS. getSerovalData returns an actual augm
 todos:
   - id: create-composable
     content: Create getSerovalData.ts — returns an augmented Promise, immediately fetches
-    status: pending
+    status: completed
   - id: create-viewer
     content: Create SerovalViewer.tsx component that recursively renders the augmented object
-    status: pending
+    status: completed
   - id: simplify-app
     content: Simplify App.tsx to use the new component and helper
-    status: pending
+    status: completed
 isProject: false
 ---
 
