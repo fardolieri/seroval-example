@@ -1,9 +1,9 @@
 ---
 name: SolidJS SerovalViewer component
-overview: Refactor into idiomatic SolidJS. getSerovalData returns a readonly store shaped like a Promise ({ state, result, error }) where the result is the augmented seroval root. SerovalViewer renders it.
+overview: Refactor into idiomatic SolidJS. getSerovalData returns an actual augmented Promise with reactive .state/.result/.error. SerovalViewer recursively renders any value including augmented Promises and Streams.
 todos:
   - id: create-composable
-    content: Create getSerovalData.ts — returns a readonly store, immediately fetches
+    content: Create getSerovalData.ts — returns an augmented Promise, immediately fetches
     status: pending
   - id: create-viewer
     content: Create SerovalViewer.tsx component that recursively renders the augmented object
@@ -21,51 +21,62 @@ isProject: false
 ```ts
 const data = getSerovalData('/api/test1');
 
-data.state   // 'pending' | 'resolved' | 'rejected'
-data.result  // the augmented seroval root object (undefined while pending)
-data.error   // error value if fetch/network fails (undefined otherwise)
+// data is a real Promise, augmented with signal-backed getters:
+data.state   // 'pending' | 'resolved' | 'rejected'  (reactive)
+data.result  // the augmented seroval root object once resolved (reactive)
+data.error   // error value if fetch fails (reactive)
+
+// still a real Promise:
+data instanceof Promise  // true
+await data               // works
+data.then(root => ...)   // works
 ```
 
-- One-shot: calling `getSerovalData(url)` immediately triggers the fetch.
-- Returns a **readonly SolidJS store** with `{ state, result, error }`.
-- `state` starts as `'pending'`. Once the first seroval root arrives it becomes `'resolved'` and `result` is set. If the fetch itself fails, `state` becomes `'rejected'` and `error` is set.
+- One-shot: calling `getSerovalData(url)` immediately triggers the fetch and returns the augmented Promise.
+- The returned Promise is the same object type as any inner augmented Promise — consistent at every level.
 - `result` is the deserialized seroval root object, augmented **in-place on the real instances**:
-  - **Promises remain actual `Promise` instances** (still `.then()`-able / `await`-able). They are extended with signal-backed `.state` (`'pending' | 'resolved' | 'rejected'`), `.result`, and `.error` getters via `Object.defineProperty`.
-  - **Streams remain actual seroval Stream instances** (still have `.on()` etc.). They are extended with signal-backed `.chunks`, `.returnChunk`, `.done`, `.error` getters via `Object.defineProperty`.
+  - **Promises remain actual `Promise` instances** (still `.then()`-able / `await`-able). Extended with signal-backed `.state`, `.result`, `.error` getters via `Object.defineProperty`.
+  - **Streams remain actual seroval Stream instances** (still have `.on()` etc.). Extended with signal-backed `.chunks`, `.returnChunk`, `.done`, `.error` getters via `Object.defineProperty`.
   - Resolved values are recursively augmented.
 
 ## New files
 
 ### `client/src/getSerovalData.ts`
 
-Core logic:
+Exports: `getSerovalData(url: string): AugmentedPromise`
 
-1. Create a store: `const [store, setStore] = createStore({ state: 'pending', result: undefined, error: undefined })`
-2. Immediately call `fetch(url)`, read chunks via `getReader()`, pass each JSON line through `fromCrossJSON(node, { refs })`
-3. Once the root object is available (first `fromCrossJSON` call that returns non-undefined), walk it recursively with `augment(value)`:
-  - If `value instanceof Promise`: the actual Promise instance gets `.state`, `.result`, `.error` defined as signal-backed getters via `Object.defineProperty`. Set up `.then(v => { setState('resolved'); setResult(augment(v)); }, e => { setState('rejected'); setError(e); })`. The Promise itself is still thenable/awaitable.
-  - If `value?.__SEROVAL_STREAM__`: the actual Stream instance gets `.chunks`, `.returnChunk`, `.done`, `.error` defined as signal-backed getters via `Object.defineProperty`. Set up `.on({ next(v) { pushChunk(augment(v)); }, throw(e) { setError(e); setDone(true); }, return(v) { setReturnChunk(augment(v)); setDone(true); } })`. The Stream itself still has its original `.on()` etc.
-  - If Array or plain Object: recurse into children
-  - Primitives, Date, RegExp: no-op
-4. Set `setStore({ state: 'resolved', result: augmentedRoot })`
-5. If `fetch` throws or the stream errors, set `setStore({ state: 'rejected', error: e })`
-6. Return the store (readonly — the setter stays internal)
+`augment(value)` — recursive function that adds reactive getters to Promises and Streams:
+
+- If `value instanceof Promise`: define `.state`, `.result`, `.error` as signal-backed getters via `Object.defineProperty`. Attach `.then(v => { setState('resolved'); setResult(augment(v)); }, e => { setState('rejected'); setError(e); })`.
+- If `value?.__SEROVAL_STREAM__`: define `.chunks`, `.returnChunk`, `.done`, `.error` as signal-backed getters. Attach `.on({ next(v) { pushChunk(augment(v)); }, throw(e) { setError(e); setDone(true); }, return(v) { setReturnChunk(augment(v)); setDone(true); } })`.
+- If Array or plain Object: recurse into children.
+- Primitives, Date, RegExp: no-op.
+
+`getSerovalData(url)` — creates the fetch Promise and augments it:
+
+1. Create `const rootPromise = new Promise((resolve, reject) => { ... })` where the executor kicks off the streaming fetch logic.
+2. Inside the executor: `fetch(url)`, read chunks via `getReader()`, pass each JSON line through `fromCrossJSON(node, { refs })`. Once the root object is available, `augment(root)` recursively, then `resolve(root)`.
+3. If anything fails, `reject(error)`.
+4. Call `augment(rootPromise)` to add signal-backed `.state`, `.result`, `.error` to it.
+5. Return `rootPromise`.
+
+The root Promise resolves to the augmented seroval root. Its `.state` starts as `'pending'`, the viewer shows `<pending...>`. Once the first seroval line arrives and the root is built, `.state` flips to `'resolved'` and `.result` becomes the augmented root object — the viewer recurses into it.
 
 ### `client/src/SerovalViewer.tsx`
 
-`<SerovalViewer value={data.result} />` wraps a `<pre>` and recursively renders:
+`<SerovalViewer value={data} />` wraps a `<pre>` and recursively renders via a `ValueNode` component:
 
-- `**ValueNode`** component dispatches by type:
-  - Primitives -> colored `<span>`s
-  - Date -> `Date(ISO string)`
-  - Promise -> reads `val.state`: if `'pending'` show `<pending...>`, if `'resolved'` recurse into `val.result`, if `'rejected'` show `<rejected>`
-  - Stream -> renders `val.chunks` as an array with `<For each={val.chunks}>`, plus `(streaming...)` suffix when `!val.done`
-  - Array -> `[` + `<For>` + `]`
-  - Object -> `{` + `<For each={Object.keys(val)}>` + `}`
+- **Primitives** -> colored `<span>`s (`null`, `undefined`, booleans, numbers, strings)
+- **Date** -> `Date(ISO string)`
+- **Promise** (`val instanceof Promise`) -> reads `val.state`:
+  - `'pending'` -> show `<pending...>`
+  - `'resolved'` -> recurse into `val.result`
+  - `'rejected'` -> show `<rejected: val.error>`
+- **Stream** (`val?.__SEROVAL_STREAM__`) -> renders `val.chunks` as an array with `<For>`, plus `(streaming...)` suffix when `!val.done`
+- **Array** -> `[` + `<For>` + `]`
+- **Object** -> `{` + `<For each={Object.keys(val)}>` + `}`
 
-Since `.state`, `.result`, `.chunks` are signal getters, SolidJS tracks them automatically — only the leaf component that reads a signal re-renders when it changes.
-
-**Note:** To distinguish a pending Promise (`undefined`) from an actual `undefined` value, the viewer checks `val instanceof Promise` and reads `.state` rather than checking for `undefined`.
+Since `.state`, `.result`, `.chunks` etc. are signal getters, SolidJS tracks them automatically — only the leaf component that reads a signal re-renders when it changes.
 
 ## Changes to existing files
 
